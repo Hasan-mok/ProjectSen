@@ -1,38 +1,4 @@
-/*
-  Smart Solar Tracking and Self-Cleaning Solar Panel System
-  Board: Arduino Uno
 
-  FINAL PIN MAP
-  -------------
-  A0  Bottom-left LDR
-  A1  Top-left LDR
-  A2  Top-right LDR
-  A3  Bottom-right LDR
-  A4  LCD SDA (I2C)
-  A5  LCD SCL (I2C)
-
-  D2  Horizontal / azimuth servo
-  D3  YF-S201 flow sensor signal (interrupt pin)
-  D4  HX711 SCK
-  D5  HX711 DT / DOUT
-  D6  Vertical / tilt servo
-  D7  DHT22 data
-  D8  Pump relay IN1
-  D9  TCRT5000 digital output DO
-  D10-D13 Unused (LEDs and buzzer were removed from the final prototype)
-
-  IMPORTANT HARDWARE NOTES
-  ------------------------
-  1. The pump and both servos must use suitable external power supplies.
-  2. Arduino GND, servo-supply GND, relay GND, and sensor GND must be common.
-  3. Never power the pump directly from an Arduino pin.
-  4. This sketch assumes an ACTIVE-LOW relay. Change RELAY_ACTIVE_LOW if needed.
-  5. The TCRT5000 is connected through DO, not AO. Adjust its potentiometer so
-     the digital output changes at the desired dust threshold.
-  6. The load cell uses the multi-mass calibration reported in Section 11,
-     Table 4. The total measured mass is converted from the raw HX711 reading,
-     then the 354 g empty-tank mass is subtracted to obtain the water mass.
-*/
 
 #include <Wire.h>
 #include <Servo.h>
@@ -42,7 +8,6 @@
 #include <EEPROM.h>
 #include <math.h>
 
-// ============================= PINS =============================
 const uint8_t LDR_BL_PIN = A0;
 const uint8_t LDR_TL_PIN = A1;
 const uint8_t LDR_TR_PIN = A2;
@@ -56,23 +21,19 @@ const uint8_t VERTICAL_SERVO_PIN   = 6;
 const uint8_t DHT_PIN              = 7;
 const uint8_t RELAY_PIN            = 8;
 const uint8_t DUST_SENSOR_PIN      = 9;
-// D10-D13 are intentionally unused in the final prototype.
 
-// ======================== DEVICE SETTINGS =======================
 #define DHTTYPE DHT22
 
-const uint8_t LCD_ADDRESS = 0x27;  // Change to 0x3F only if the LCD remains blank.
+const uint8_t LCD_ADDRESS = 0x27;
 const uint8_t LCD_COLUMNS = 16;
 const uint8_t LCD_ROWS    = 2;
 
 const bool RELAY_ACTIVE_LOW = true;
 const bool DUST_ACTIVE_LOW  = true;
 
-// Change either value if that servo moves away from the stronger light.
 const bool HORIZONTAL_REVERSED = false;
 const bool VERTICAL_REVERSED   = false;
 
-// ======================== TRACKING SETTINGS =====================
 const int LDR_TOLERANCE = 50;
 const int SERVO_STEP_DEG = 1;
 
@@ -88,7 +49,6 @@ const unsigned long LDR_SAMPLE_INTERVAL_MS = 100UL;
 const unsigned long TRACKING_INTERVAL_MS   = 150UL;
 const unsigned long POST_CLEANING_SETTLE_MS = 10000UL;
 
-// ======================== CLEANING SETTINGS =====================
 const float MIN_WATER_TO_CLEAN_L = 0.50f;
 const float CRITICAL_WATER_L     = 0.30f;
 
@@ -99,7 +59,6 @@ const unsigned long CLEANING_DURATION_MS  = 5000UL;
 const unsigned long FLOW_CHECK_TIME_MS    = 3000UL;
 const float MIN_ACCEPTABLE_FLOW_L_MIN     = 1.00f;
 
-// YF-S201 nominal relation: frequency (Hz) = 7.5 x flow rate (L/min)
 const float FLOW_HZ_PER_L_MIN = 7.5f;
 const float FLOW_PULSES_PER_LITER = 450.0f;
 
@@ -107,24 +66,11 @@ const uint8_t DUST_CONFIRMATION_COUNT = 3;
 const uint8_t DUST_CLEAR_COUNT        = 5;
 const unsigned long DUST_SAMPLE_INTERVAL_MS = 500UL;
 
-// ====================== LOAD-CELL CALIBRATION ===================
-// Multi-mass calibration from Section 11, Table 4:
-//   76 g  ->  65,480 counts
-//   209 g -> 179,540 counts
-//   354 g -> 304,760 counts
-//   62 g  ->  53,220 counts
-//
-// These points give approximately 860 HX711 counts per gram, which also
-// reproduces the calculated masses shown in the report:
-//   measured total mass (g) = raw HX711 reading / 860
-//
-// The tank itself has a measured mass of 354 g, so:
-//   water mass (g) = measured total mass (g) - 354 g
 const float LOAD_CELL_COUNTS_PER_GRAM = 860.0f;
 const float LOAD_CELL_INTERCEPT_G     = 0.0f;
 const float EMPTY_TANK_MASS_G         = 354.0f;
 
-const uint32_t LDR_CAL_MAGIC  = 0x4C445243UL;  // "LDRC"
+const uint32_t LDR_CAL_MAGIC  = 0x4C445243UL;
 const int EEPROM_LDR_CAL_ADDRESS  = 32;
 
 struct LdrCalibrationData {
@@ -135,7 +81,6 @@ struct LdrCalibrationData {
   float kBR;
 };
 
-// =========================== TIMING =============================
 const unsigned long DHT_INTERVAL_MS       = 2500UL;
 const unsigned long HX711_INTERVAL_MS     = 500UL;
 const unsigned long FLOW_INTERVAL_MS      = 1000UL;
@@ -144,14 +89,12 @@ const unsigned long LCD_ALARM_INTERVAL_MS = 500UL;
 const unsigned long SERIAL_INTERVAL_MS    = 1000UL;
 const unsigned long SENSOR_STALE_LIMIT_MS = 10000UL;
 
-// =========================== OBJECTS =============================
 Servo horizontalServo;
 Servo verticalServo;
 DHT dht(DHT_PIN, DHTTYPE);
 HX711 scale;
 LiquidCrystal_I2C lcd(LCD_ADDRESS, LCD_COLUMNS, LCD_ROWS);
 
-// ======================= GLOBAL VARIABLES =======================
 int rawTL = 0;
 int rawTR = 0;
 int rawBL = 0;
@@ -182,7 +125,7 @@ unsigned long lastValidDhtMs = 0;
 float waterMassG  = NAN;
 float waterLiters = NAN;
 bool loadCellValid = false;
-bool loadCalibrationValid = true;  // Fixed multi-mass calibration from the report.
+bool loadCalibrationValid = true;
 float loadCalibrationFactor = LOAD_CELL_COUNTS_PER_GRAM;
 long loadCalibrationOffset = 0;
 long loadCellRaw = 0;
@@ -218,7 +161,6 @@ unsigned long lastLcdAlarmMs = 0;
 unsigned long lastSerialMs = 0;
 uint8_t lcdPage = 0;
 
-// ======================= FUNCTION PROTOTYPES =====================
 void flowPulseISR();
 void pumpOn();
 void pumpOff();
@@ -258,12 +200,10 @@ void calibrateLdrsUnderUniformLight();
 void eraseCalibrations();
 const __FlashStringHelper *currentStatusText();
 
-// ============================== SETUP =============================
 void setup() {
   Serial.begin(115200);
   Serial.setTimeout(100);
 
-  // Set the safe relay state before changing the pin to OUTPUT.
   digitalWrite(RELAY_PIN, RELAY_ACTIVE_LOW ? HIGH : LOW);
   pinMode(RELAY_PIN, OUTPUT);
   pumpOff();
@@ -309,12 +249,9 @@ void setup() {
   lastLcdPageMs = now;
 }
 
-// =============================== LOOP =============================
 void loop() {
   handleSerialCommands();
 
-  // Check the pump timer first so the pump cannot remain on because of a
-  // slower sensor read elsewhere in the loop.
   if (cleaningActive) {
     updateCleaningCycle();
   }
@@ -336,12 +273,10 @@ void loop() {
   printSerialStatus();
 }
 
-// ============================ INTERRUPT ============================
 void flowPulseISR() {
   totalFlowPulses++;
 }
 
-// ========================== PUMP CONTROL ===========================
 void pumpOn() {
   digitalWrite(RELAY_PIN, RELAY_ACTIVE_LOW ? LOW : HIGH);
 }
@@ -350,7 +285,6 @@ void pumpOff() {
   digitalWrite(RELAY_PIN, RELAY_ACTIVE_LOW ? HIGH : LOW);
 }
 
-// =========================== LDR TRACKING ==========================
 int readAveragedAnalog(uint8_t pin, uint8_t samples) {
   unsigned long sum = 0;
   for (uint8_t i = 0; i < samples; i++) {
@@ -403,7 +337,6 @@ void updateTracking() {
   }
   lastTrackingMs = now;
 
-  // Pause movement briefly after spraying so the water can settle.
   if (cleaningFinishedMs != 0 &&
       now - cleaningFinishedMs < POST_CLEANING_SETTLE_MS) {
     return;
@@ -446,7 +379,6 @@ void updateTracking() {
   }
 }
 
-// =========================== DUST SENSOR ===========================
 void updateDustDetection() {
   const unsigned long now = millis();
   if (now - lastDustSampleMs < DUST_SAMPLE_INTERVAL_MS) {
@@ -501,7 +433,6 @@ void updateDhtSensor() {
   }
 }
 
-// ========================== HX711 / WATER ==========================
 void updateLoadCell() {
   const unsigned long now = millis();
   if (now - lastHx711Ms < HX711_INTERVAL_MS) {
@@ -524,12 +455,10 @@ void updateLoadCell() {
 
   float newMassG = measuredTotalMassG - EMPTY_TANK_MASS_G;
 
-  // Small negative values can occur because of vibration and measurement noise.
   if (newMassG < 0.0f && newMassG > -20.0f) {
     newMassG = 0.0f;
   }
 
-  // Valid range for the one-liter prototype plus a reasonable margin.
   if (newMassG >= -20.0f && newMassG <= 2000.0f) {
     if (isnan(waterMassG)) {
       waterMassG = newMassG;
@@ -565,7 +494,6 @@ bool waterLevelCritical() {
          waterLiters <= CRITICAL_WATER_L;
 }
 
-// ============================ FLOW SENSOR ===========================
 void updateFlowMeasurement() {
   const unsigned long now = millis();
   const unsigned long elapsedMs = now - lastFlowMs;
@@ -592,13 +520,11 @@ void updateFlowMeasurement() {
   lastFlowMs = now;
 }
 
-// =========================== CLEANING LOGIC =========================
 bool environmentalCleaningBlocked() {
   if (!dhtValid) {
-    return true;  // Fail-safe if temperature or humidity is unavailable.
+    return true;
   }
 
-  // Report rule: cleaning is blocked only when BOTH values are high.
   return temperatureC >= HIGH_TEMPERATURE_C &&
          humidityPct >= HIGH_HUMIDITY_PCT;
 }
@@ -652,13 +578,11 @@ void updateCleaningCycle() {
   const unsigned long now = millis();
   const unsigned long elapsedMs = now - cleaningStartMs;
 
-  // Absolute maximum-time fail-safe.
   if (elapsedMs >= CLEANING_DURATION_MS) {
     stopCleaningSuccessfully();
     return;
   }
 
-  // Extra protection if the tank becomes critically low during spraying.
   if (loadCellValid && waterLevelCritical()) {
     stopCleaningLowWater();
     return;
@@ -730,7 +654,6 @@ void triggerFlowFault(float measuredFlowLMin) {
   Serial.println(F("Fix the water path, then send 'f' to clear the fault."));
 }
 
-// ================================ LCD ===============================
 const __FlashStringHelper *currentStatusText() {
   if (flowFaultLatched) {
     return F("FLOW ERROR");
@@ -891,7 +814,6 @@ void updateLcd() {
   lcdPage = (lcdPage + 1) % 4;
 }
 
-// =========================== SERIAL OUTPUT ==========================
 void printSerialStatus() {
   const unsigned long now = millis();
   if (now - lastSerialMs < SERIAL_INTERVAL_MS) {
@@ -1039,16 +961,11 @@ void handleSerialCommands() {
   }
 }
 
-// ============================ CALIBRATION ============================
 void loadLoadCalibration() {
-  // The final report uses a fixed multi-mass calibration rather than a
-  // single-point calibration or runtime tare.
   loadCalibrationFactor = LOAD_CELL_COUNTS_PER_GRAM;
   loadCalibrationOffset = 0;
   loadCalibrationValid = true;
 
-  // Keep the HX711 object configured consistently, although updateLoadCell()
-  // uses the raw average directly to apply the report equation.
   scale.set_scale(loadCalibrationFactor);
   scale.set_offset(loadCalibrationOffset);
 }
@@ -1147,7 +1064,6 @@ void eraseCalibrations() {
   LdrCalibrationData ldrData = {0, 1.0f, 1.0f, 1.0f, 1.0f};
   EEPROM.put(EEPROM_LDR_CAL_ADDRESS, ldrData);
 
-  // The report-based load-cell calibration remains active and is not erased.
   loadLoadCalibration();
 
   ldrCalibrationValid = false;
